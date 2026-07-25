@@ -47,14 +47,21 @@ export async function getSelectedPortfolioId(): Promise<string | null> {
 
 const apiBaseUrl = process.env.API_URL ?? "";
 const authConfigured = Boolean(process.env.AUTH_SECRET && process.env.AUTHENTIK_ISSUER);
+// DEV_AUTH_TOKEN is a dev-only bypass — never active in production (same NODE_ENV
+// guard pattern as isAllowedHost in apps/web/src/proxy.ts).
+const devToken = process.env.NODE_ENV !== "production" ? process.env.DEV_AUTH_TOKEN : undefined;
 
 const getServerApi = cache(async (): Promise<ApiClient | null> => {
-  if (!authConfigured) return null;
-  const cookieHeader = (await cookies())
-    .getAll()
-    .map((c) => `${c.name}=${c.value}`)
-    .join("; ");
-  const token = await accessTokenFromCookieHeader(cookieHeader);
+  let token: string | null = null;
+  if (devToken) {
+    token = devToken;
+  } else if (authConfigured) {
+    const cookieHeader = (await cookies())
+      .getAll()
+      .map((c) => `${c.name}=${c.value}`)
+      .join("; ");
+    token = await accessTokenFromCookieHeader(cookieHeader);
+  }
   if (!token) return null;
   return createApiClient({ baseUrl: apiBaseUrl, getToken: () => token });
 });
