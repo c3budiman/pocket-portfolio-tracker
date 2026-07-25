@@ -138,6 +138,7 @@ function rotateRefreshTokenOnce(refreshToken: string): Promise<RefreshResult> {
 }
 
 const localAuthAvailable = Boolean(process.env.AUTH_LOCAL_SECRET);
+const authentikAvailable = Boolean(process.env.AUTHENTIK_ISSUER);
 
 export const authConfig: NextAuthConfig = {
   // Self-hosted behind a reverse proxy (Proxmox / same origin as Authentik): trust
@@ -151,13 +152,22 @@ export const authConfig: NextAuthConfig = {
   // next-intl localizes the path (→ /<locale>/auth-error). See auth-error-recovery.tsx.
   pages: { error: "/auth-error" },
   providers: [
-    Authentik({
-      clientId: process.env.AUTHENTIK_CLIENT_ID,
-      clientSecret: process.env.AUTHENTIK_CLIENT_SECRET,
-      issuer: process.env.AUTHENTIK_ISSUER,
-      // `offline_access` makes Authentik issue a refresh token we can rotate with.
-      authorization: { params: { scope: "openid profile email offline_access" } },
-    }),
+    // Only register Authentik when it's actually configured (AUTHENTIK_ISSUER set) —
+    // Auth.js validates every provider's config on each request (assertConfig), so an
+    // unconditionally-registered Authentik provider with an empty issuer throws
+    // InvalidEndpoints on every /api/auth/* call, including AuthSessionProvider's 60s
+    // poll (session-provider.tsx) — which fires regardless of DEV_AUTH_TOKEN/local auth.
+    ...(authentikAvailable
+      ? [
+          Authentik({
+            clientId: process.env.AUTHENTIK_CLIENT_ID,
+            clientSecret: process.env.AUTHENTIK_CLIENT_SECRET,
+            issuer: process.env.AUTHENTIK_ISSUER,
+            // `offline_access` makes Authentik issue a refresh token we can rotate with.
+            authorization: { params: { scope: "openid profile email offline_access" } },
+          }),
+        ]
+      : []),
     // Local password auth (optional — requires AUTH_LOCAL_SECRET in env).
     ...(localAuthAvailable
       ? [
@@ -242,6 +252,21 @@ export const authConfig: NextAuthConfig = {
       if (!refreshToken) {
         token.error = "RefreshTokenMissing";
         console.warn("[auth] access token expired with no refresh token — re-login required.");
+        return token;
+      }
+
+      // A refresh is only possible while Authentik is actually configured — without
+      // this, a stale cookie carrying a refreshToken from a PRIOR Authentik session
+      // (e.g. toggling AUTHENTIK_ISSUER off for local dev after logging in for real)
+      // would call tokenEndpoint(), which builds a URL from an empty issuer and
+      // throws "Invalid URL" — caught, but mislogged as a network error every poll.
+      if (!authentikAvailable) {
+        token.error = "RefreshTokenMissing";
+        console.warn(
+          "[auth] access token expired but Authentik isn't configured (AUTHENTIK_ISSUER " +
+            "unset) — can't refresh; re-login required. Clear the stale session cookie if " +
+            "this is a dev environment that recently disabled Authentik.",
+        );
         return token;
       }
 
