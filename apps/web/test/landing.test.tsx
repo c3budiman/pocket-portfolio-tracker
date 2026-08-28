@@ -67,7 +67,7 @@ describe("Landing (Pocket split-hero sign-in)", () => {
     // no matter what the user typed.
     expect(signInMock).toHaveBeenCalledWith("credentials", {
       email: "owner@example.com",
-      password: "correct horse battery",
+      password: "correct horse battery", // pragma: allowlist secret
       callbackUrl: "/holdings",
     });
   });
